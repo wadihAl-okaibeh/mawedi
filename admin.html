@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>إدارة موعدي</title>
+<style>
+  :root { --bg:#EEF3F1; --card:#fff; --ink:#0F2A2E; --soft:#4A6166; --line:#CBD8D4; --accent:#0B8F7A; --accent-ink:#fff; --soft-bg:#D3EFE9; --warn:#B4730A; --warn-bg:#FBEBC9; --bad:#B3402F; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0C1819; --card:#132426; --ink:#E6F1EE; --soft:#9DB5B0; --line:#28423F; --accent:#3CC7AE; --accent-ink:#072320; --soft-bg:#14403A; --warn:#E8B04D; --warn-bg:#3A2E12; --bad:#F08A78; color-scheme: dark; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.6 system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif; padding:20px 16px 48px; }
+  main { max-width:860px; margin:0 auto; display:grid; gap:16px; }
+  h1, h2 { margin:0; } .muted { color:var(--soft); font-size:.9rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; display:grid; gap:10px; }
+  input { font:inherit; color:inherit; width:100%; padding:10px 12px; border-radius:10px; border:1.5px solid var(--line); background:var(--card); }
+  button { font:inherit; cursor:pointer; padding:8px 12px; border-radius:9px; border:1px solid var(--line); background:transparent; color:inherit; }
+  button.main { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  .stats { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; }
+  .stat b { display:block; font-size:1.5rem; }
+  .row { display:grid; grid-template-columns:1fr auto; gap:8px 12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .row .acts { grid-column:1 / -1; display:flex; gap:8px; flex-wrap:wrap; }
+  .pill { font-size:.75rem; padding:2px 9px; border-radius:99px; font-weight:600; background:var(--soft-bg); color:var(--accent); }
+  .pill.due { background:var(--warn-bg); color:var(--warn); } .pill.frozen { background:var(--line); color:var(--bad); }
+  .err { color:var(--bad); min-height:1.3em; }
+  .list { display:grid; gap:8px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>إدارة موعدي</h1>
+
+  <section class="card" id="login">
+    <label for="em">البريد الإلكتروني</label><input id="em" type="email" autocomplete="username" dir="ltr">
+    <label for="pw">كلمة السر</label><input id="pw" type="password" autocomplete="current-password" dir="ltr">
+    <div class="err" id="lerr"></div>
+    <button class="main" id="go" type="button">دخول</button>
+  </section>
+
+  <div id="panel" hidden style="display:grid;gap:16px">
+    <div class="stats">
+      <div class="stat"><b id="sMrr">$0</b><span class="muted">دخل شهري فعّال</span></div>
+      <div class="stat"><b id="sDue">$0</b><span class="muted">مبالغ مستحقة</span></div>
+      <div class="stat"><b id="sFrozen">0</b><span class="muted">محلات مجمّدة</span></div>
+    </div>
+    <div class="card">
+      <label for="whish">رقم Whish تبعك (بيدخل برسالة التذكير)</label>
+      <input id="whish" type="tel" dir="ltr" placeholder="+961 ...">
+      <div class="muted">زر "نسخ التذكير" بينسخ الرسالة. بتبعتها أنت على واتساب.</div>
+      <textarea id="fb" rows="4" readonly hidden style="width:100%;font:inherit;padding:10px;border-radius:10px"></textarea>
+    </div>
+    <div class="list" id="list"></div>
+    <div><button id="out" type="button">تسجيل الخروج</button></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script>
+(function () {
+  var sb = supabase.createClient(MAWEDI.SUPABASE_URL, MAWEDI.SUPABASE_ANON_KEY);
+  var $ = function (id) { return document.getElementById(id); };
+  var fmt = new Intl.DateTimeFormat('ar-u-nu-latn', { day: 'numeric', month: 'long' });
+  var REMIND = 3;
+
+  function daysLeft(iso) {
+    var a = new Date(iso + 'T00:00:00'), b = new Date(); b.setHours(0, 0, 0, 0);
+    return Math.round((a - b) / 864e5);
+  }
+  function status(d) { return d > REMIND ? 'paid' : d > 0 ? 'due' : 'frozen'; }
+  function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }
+
+  function copy(txt) {
+    var fb = $('fb');
+    function manual() { fb.hidden = false; fb.value = txt; fb.focus(); fb.select(); }
+    try { navigator.clipboard.writeText(txt).then(function () { fb.hidden = true; }, manual); } catch (e) { manual(); }
+  }
+  function reminder(s) {
+    var d = daysLeft(s.paid_until), num = $('whish').value.trim() || '[رقم Whish]';
+    var date = fmt.format(new Date(s.paid_until + 'T00:00:00'));
+    return 'مرحباً ' + s.name + '، اشتراككم في موعدي ($' + Number(s.plan_price).toFixed(2) + ') ' + (d <= 0 ? 'انتهى' : 'ينتهي') + ' بتاريخ ' + date + '. التحويل على Whish للرقم ' + num + '. بعد الدفع ابعتلي رقم العملية. شكراً!';
+  }
+
+  async function load() {
+    var r = await sb.from('shops').select('id,name,slug,plan_price,paid_until').order('paid_until');
+    var cl = await sb.from('payment_claims').select('shop_id,reference').eq('status', 'pending');
+    var claims = {};
+    (cl.data || []).forEach(function (c) { claims[c.shop_id] = c.reference; });
+    if (r.error) { $('lerr').textContent = 'ما قدرت أجيب المحلات. تأكد إنك أدمن.'; show(false); return; }
+    var mrr = 0, owed = 0, fr = 0, list = $('list');
+    list.replaceChildren();
+    r.data.forEach(function (s) {
+      var d = daysLeft(s.paid_until), st = status(d);
+      if (st !== 'frozen') mrr += Number(s.plan_price);
+      if (st !== 'paid') owed += Number(s.plan_price);
+      if (st === 'frozen') fr++;
+      var row = el('div', 'row');
+      var info = el('div');
+      info.appendChild(el('b', '', s.name + ' · $' + Number(s.plan_price).toFixed(2)));
+      info.appendChild(el('div', 'muted', fmt.format(new Date(s.paid_until + 'T00:00:00')) + ' · ' + (d > 0 ? 'يتوقف بعد ' + d + ' يوم' : 'متوقف') + ' · ' + s.slug));
+      if (claims[s.id]) info.appendChild(el('div', 'muted', 'بانتظار التأكيد، رقم العملية: ' + claims[s.id]));
+      row.appendChild(info);
+      row.appendChild(el('span', 'pill ' + (st === 'paid' ? '' : st), st === 'paid' ? 'مدفوع' : st === 'due' ? 'مستحق' : 'مجمّد'));
+      var acts = el('div', 'acts');
+      var ok = el('button', 'main', 'تأكيد دفعة Whish'); ok.type = 'button';
+      ok.onclick = async function () {
+        ok.disabled = true;
+        var x = await sb.rpc('admin_confirm_payment', { p_shop: s.id });
+        if (x.error) { alert('ما انحفظت الدفعة'); ok.disabled = false; } else { load(); }
+      };
+      var cp = el('button', '', 'نسخ التذكير'); cp.type = 'button';
+      cp.onclick = function () { copy(reminder(s)); };
+      acts.appendChild(ok); acts.appendChild(cp);
+      row.appendChild(acts);
+      list.appendChild(row);
+    });
+    $('sMrr').textContent = '$' + mrr.toFixed(2); $('sDue').textContent = '$' + owed.toFixed(2); $('sFrozen').textContent = fr;
+    show(true);
+  }
+  function show(on) { $('panel').hidden = !on; $('login').hidden = on; }
+
+  $('go').onclick = async function () {
+    $('lerr').textContent = '';
+    var r = await sb.auth.signInWithPassword({ email: $('em').value.trim(), password: $('pw').value });
+    if (r.error) { $('lerr').textContent = 'البريد أو كلمة السر غلط.'; return; }
+    load();
+  };
+  $('out').onclick = async function () { await sb.auth.signOut(); show(false); };
+  try { var saved = localStorage.getItem('whish'); if (saved) $('whish').value = saved; } catch (e) {}
+  $('whish').oninput = function () { try { localStorage.setItem('whish', $('whish').value); } catch (e) {} };
+
+  sb.auth.getSession().then(function (r) { if (r.data && r.data.session) load(); });
+})();
+</script>
+</body>
+</html>
