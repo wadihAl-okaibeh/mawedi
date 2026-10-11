@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="موعدي">
+<meta name="theme-color" content="#0B8F7A">
+<title>موعدي</title>
+<style>
+  :root { --bg:#EEF3F1; --card:#fff; --ink:#0F2A2E; --soft:#4A6166; --line:#CBD8D4; --accent:#0B8F7A; --accent-ink:#fff; --soft-bg:#D3EFE9; --tabs:#E3EBE8; --bad:#B3402F; --warn:#B4730A; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0C1819; --card:#132426; --ink:#E6F1EE; --soft:#9DB5B0; --line:#28423F; --accent:#3CC7AE; --accent-ink:#072320; --soft-bg:#14403A; --tabs:#1B3033; --bad:#F08A78; --warn:#E8B04D; color-scheme: dark; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.6 system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+         padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(40px + env(safe-area-inset-bottom, 0px)); }
+  main { max-width:560px; margin:0 auto; display:grid; gap:14px; }
+  h1 { margin:0; font-size:1.5rem; } h2 { margin:0; font-size:1.05rem; }
+  .soft { color:var(--soft); margin:0; } .msg { color:var(--bad); margin:0; min-height:1.3em; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; display:grid; gap:10px; }
+  input { font:inherit; color:inherit; width:100%; padding:12px; border-radius:10px; border:1.5px solid var(--line); background:var(--card); }
+  button { font:inherit; color:inherit; cursor:pointer; }
+  .btn { border:0; background:var(--accent); color:var(--accent-ink); font-weight:600; padding:13px; border-radius:11px; width:100%; }
+  .btn.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); font-weight:500; }
+  .btn:disabled { opacity:.5; }
+  .small { padding:8px 12px; width:auto; font-size:.9rem; }
+  .tabs { display:flex; gap:4px; background:var(--tabs); padding:4px; border-radius:12px; }
+  .tab { flex:1; min-width:0; border:0; background:transparent; padding:10px 4px; border-radius:9px; color:var(--soft); font-size:.9rem; }
+  .tab[aria-selected="true"] { background:var(--card); color:var(--ink); font-weight:600; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; } .row > * { flex:1; min-width:0; }
+  .between { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .appt { display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:start; }
+  .time { font-weight:700; font-size:1.1rem; min-width:54px; font-variant-numeric:tabular-nums; }
+  .pill { font-size:.75rem; font-weight:600; color:var(--accent); }
+  .pill.cancel { color:var(--warn); } .pill.done { color:var(--soft); }
+  .ltr { direction:ltr; text-align:right; }
+  .arrow { border:0; background:transparent; color:var(--accent); font-size:2rem; padding:0 12px; line-height:1; }
+  .empty { text-align:center; color:var(--soft); padding:20px; border:1.5px dashed var(--line); border-radius:12px; }
+  .bar { height:10px; background:var(--tabs); border-radius:99px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--accent); }
+  textarea { width:100%; font:inherit; padding:10px; border-radius:10px; border:1.5px solid var(--line); background:var(--card); color:inherit; }
+  :focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+</style>
+</head>
+<body>
+<main id="app"><p class="soft">جاري التحميل...</p></main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script>
+(function () {
+  var sb = supabase.createClient(MAWEDI.SUPABASE_URL, MAWEDI.SUPABASE_ANON_KEY);
+  var app = document.getElementById('app');
+  var S = { shop: null, tab: 'bookings', day: startOfDay(new Date()), user: null };
+
+  function startOfDay(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+  function el(tag, props, kids) {
+    var n = document.createElement(tag);
+    Object.keys(props || {}).forEach(function (k) {
+      var v = props[k];
+      if (k === 'class') n.className = v;
+      else if (k === 'text') n.textContent = v;
+      else if (k.slice(0, 2) === 'on') n[k] = v;
+      else n.setAttribute(k, v);
+    });
+    (kids || []).forEach(function (c) { if (c) n.appendChild(c); });
+    return n;
+  }
+  function show(node) { app.replaceChildren(node); window.scrollTo(0, 0); }
+  function wrap(kids) { return el('div', { style: 'display:grid;gap:14px' }, kids); }
+  function money(n) { return '$' + Number(n).toFixed(2).replace(/\.00$/, ''); }
+  function active() { return new Date(S.shop.paid_until + 'T00:00:00') > startOfDay(new Date()); }
+  function daysLeft() { return Math.round((new Date(S.shop.paid_until + 'T00:00:00') - startOfDay(new Date())) / 864e5); }
+  function copy(txt, done, fb) {
+    function manual() { if (fb) { fb.hidden = false; fb.value = txt; fb.focus(); fb.select(); } }
+    try { navigator.clipboard.writeText(txt).then(done, manual); } catch (e) { manual(); }
+  }
+
+  /* ---------- Auth ---------- */
+  function viewAuth() {
+    var em = el('input', { id: 'em', type: 'email', placeholder: 'البريد الإلكتروني', autocomplete: 'username', dir: 'ltr' });
+    var pw = el('input', { id: 'pw', type: 'password', placeholder: 'كلمة السر', autocomplete: 'current-password', dir: 'ltr' });
+    var msg = el('p', { class: 'msg' });
+    async function go(signup) {
+      msg.textContent = '';
+      var creds = { email: em.value.trim(), password: pw.value };
+      var r = signup ? await sb.auth.signUp(creds) : await sb.auth.signInWithPassword(creds);
+      if (r.error) { msg.textContent = 'ما زبطت العملية. تأكد من البريد وكلمة السر (6 أحرف على الأقل).'; return; }
+      if (signup && !r.data.session) { msg.textContent = 'تم إنشاء الحساب. افتح رسالة التأكيد على بريدك وبعدين سجّل الدخول.'; return; }
+      route();
+    }
+    return wrap([
+      el('h1', { text: 'موعدي' }),
+      el('p', { class: 'soft', text: 'سجّل دخولك لإدارة مواعيد محلك.' }),
+      el('div', { class: 'card' }, [em, pw, msg,
+        el('button', { class: 'btn', type: 'button', text: 'دخول', onclick: function () { go(false); } }),
+        el('button', { class: 'btn ghost', type: 'button', text: 'حساب جديد', onclick: function () { go(true); } })])
+    ]);
+  }
+
+  /* ---------- Create shop ---------- */
+  function viewCreate() {
+    var name = el('input', { id: 'sname', placeholder: 'اسم المحل' });
+    var slug = el('input', { id: 'sslug', placeholder: 'الرابط، مثلاً nokhba', dir: 'ltr', autocapitalize: 'none' });
+    var msg = el('p', { class: 'msg' });
+    return wrap([
+      el('h1', { text: 'أنشئ محلك' }),
+      el('p', { class: 'soft', text: 'الاشتراك شهري ويبدأ من أول يوم. التطبيق بيشتغل بعد تأكيد أول دفعة.' }),
+      el('div', { class: 'card' }, [name, slug, msg, el('button', {
+        class: 'btn', type: 'button', text: 'إنشاء', onclick: async function () {
+          msg.textContent = '';
+          var clean = slug.value.trim().toLowerCase();
+          if (name.value.trim().length < 2) { msg.textContent = 'اكتب اسم المحل.'; return; }
+          if (!/^[a-z0-9-]{3,40}$/.test(clean)) { msg.textContent = 'الرابط: حروف إنجليزية صغيرة وأرقام وشرطة، من 3 إلى 40 حرف.'; return; }
+          var r = await sb.from('shops').insert({ owner_id: S.user.id, name: name.value.trim(), slug: clean });
+          if (r.error) { msg.textContent = r.error.code === '23505' ? 'هالرابط مستخدم. جرّب اسم تاني.' : 'ما انحفظ المحل. جرّب مرة تانية.'; return; }
+          route();
+        }
+      })]),
+      el('button', { class: 'btn ghost', type: 'button', text: 'تسجيل الخروج', onclick: signOut })
+    ]);
+  }
+
+  /* ---------- Tabs ---------- */
+  var TABS = [['bookings', 'المواعيد'], ['services', 'الخدمات'], ['link', 'الرابط'], ['sub', 'الاشتراك']];
+
+  function viewMain() {
+    var content = el('div', { id: 'content', style: 'display:grid;gap:12px' });
+    var tabs = el('div', { class: 'tabs', role: 'tablist' }, TABS.map(function (t) {
+      return el('button', {
+        class: 'tab', role: 'tab', type: 'button', text: t[1], 'aria-selected': String(S.tab === t[0]),
+        onclick: function () { S.tab = t[0]; render(); }
+      });
+    }));
+    setTimeout(function () { loadTab(content); }, 0);
+    return wrap([el('h1', { text: S.shop.name }), tabs, content]);
+  }
+  function loadTab(c) {
+    if (S.tab === 'bookings') tabBookings(c);
+    else if (S.tab === 'services') tabServices(c);
+    else if (S.tab === 'link') tabLink(c);
+    else tabSub(c);
+  }
+
+  /* ---------- Bookings ---------- */
+  async function tabBookings(c) {
+    var from = S.day.toISOString(), to = new Date(S.day.getTime() + 864e5).toISOString();
+    var r = await sb.from('bookings').select('id,starts_at,customer_name,customer_phone,status,services(name,price)')
+      .gte('starts_at', from).lt('starts_at', to).order('starts_at');
+    var rows = r.data || [];
+    var live = rows.filter(function (x) { return x.status !== 'cancel'; });
+    var rev = live.reduce(function (a, x) { return a + Number((x.services && x.services.price) || 0); }, 0);
+    function shift(n) { S.day = new Date(S.day.getTime() + n * 864e5); tabBookings(c); }
+    var label = S.day.toLocaleDateString('ar-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'long' });
+    var kids = [
+      el('div', { class: 'between' }, [
+        el('button', { class: 'arrow', type: 'button', text: '›', 'aria-label': 'اليوم السابق', onclick: function () { shift(-1); } }),
+        el('b', { text: label }),
+        el('button', { class: 'arrow', type: 'button', text: '‹', 'aria-label': 'اليوم التالي', onclick: function () { shift(1); } })
+      ]),
+      el('p', { class: 'soft', text: live.length + ' مواعيد · دخل متوقع ' + money(rev) })
+    ];
+    if (!rows.length) kids.push(el('div', { class: 'empty', text: 'ما في مواعيد بهاد اليوم.' }));
+    rows.forEach(function (b) {
+      var t = new Date(b.starts_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: S.shop.tz });
+      var st = b.status === 'up' ? 'قادم' : b.status === 'done' ? 'تمت' : 'ملغي';
+      var info = el('div', {}, [
+        el('b', { text: b.customer_name }),
+        el('div', { class: 'soft', text: (b.services ? b.services.name + ' · ' + money(b.services.price) : '') }),
+        el('div', { class: 'soft ltr', text: b.customer_phone }),
+        el('span', { class: 'pill ' + (b.status === 'up' ? '' : b.status), text: st })
+      ]);
+      var acts = [];
+      if (b.status === 'up') {
+        acts.push(el('button', { class: 'btn small', type: 'button', text: 'تمت', onclick: function () { setStatus(b.id, 'done', c); } }));
+        acts.push(el('button', { class: 'btn ghost small', type: 'button', text: 'إلغاء', onclick: function () { setStatus(b.id, 'cancel', c); } }));
+      }
+      kids.push(el('div', { class: 'card' }, [
+        el('div', { class: 'appt' }, [el('div', { class: 'time', text: t }), info]),
+        acts.length ? el('div', { class: 'row' }, acts) : null
+      ]));
+    });
+    c.replaceChildren.apply(c, kids);
+  }
+  async function setStatus(id, status, c) {
+    await sb.from('bookings').update({ status: status }).eq('id', id);
+    tabBookings(c);
+  }
+
+  /* ---------- Services ---------- */
+  async function tabServices(c) {
+    var r = await sb.from('services').select('*').order('name');
+    var list = r.data || [];
+    var name = el('input', { id: 'vname', placeholder: 'اسم الخدمة' });
+    var mins = el('input', { id: 'vmin', placeholder: 'دقائق', inputmode: 'numeric', value: '30' });
+    var price = el('input', { id: 'vprice', placeholder: 'السعر $', inputmode: 'decimal' });
+    var msg = el('p', { class: 'msg' });
+    var form = el('div', { class: 'card' }, [
+      el('h2', { text: 'خدمة جديدة' }), name,
+      el('div', { class: 'row' }, [mins, price]), msg,
+      el('button', {
+        class: 'btn', type: 'button', text: 'إضافة', onclick: async function () {
+          var m = parseInt(mins.value, 10), p = parseFloat(price.value);
+          if (!name.value.trim() || !(m >= 5) || !(p >= 0)) { msg.textContent = 'اكتب الاسم والمدة بالدقائق والسعر.'; return; }
+          var x = await sb.from('services').insert({ shop_id: S.shop.id, name: name.value.trim(), minutes: m, price: p });
+          if (x.error) { msg.textContent = 'ما انحفظت الخدمة.'; return; }
+          tabServices(c);
+        }
+      })
+    ]);
+    var kids = [form];
+    if (!list.length) kids.push(el('div', { class: 'empty', text: 'أضف أول خدمة حتى الزبائن يقدروا يحجزوا.' }));
+    list.forEach(function (v) {
+      kids.push(el('div', { class: 'card', style: v.active ? '' : 'opacity:.55' }, [el('div', { class: 'between' }, [
+        el('div', {}, [el('b', { text: v.name }), el('div', { class: 'soft', text: v.minutes + ' دقيقة · ' + money(v.price) })]),
+        el('button', {
+          class: 'btn ghost small', type: 'button', text: v.active ? 'إخفاء' : 'إظهار', onclick: async function () {
+            await sb.from('services').update({ active: !v.active }).eq('id', v.id); tabServices(c);
+          }
+        })
+      ])]));
+    });
+    c.replaceChildren.apply(c, kids);
+  }
+
+  /* ---------- Link ---------- */
+  function tabLink(c) {
+    var url = new URL('book.html?s=' + S.shop.slug, location.href).href;
+    var fb = el('textarea', { rows: '3', readonly: 'readonly', hidden: 'hidden' });
+    var done = el('p', { class: 'soft' });
+    c.replaceChildren(
+      el('div', { class: 'card' }, [
+        el('h2', { text: 'رابط الحجز لزبائنك' }),
+        el('div', { class: 'soft ltr', style: 'overflow-wrap:anywhere', text: url }),
+        el('button', { class: 'btn', type: 'button', text: 'نسخ الرابط', onclick: function () { copy(url, function () { done.textContent = 'تم النسخ.'; }, fb); } }),
+        el('a', { class: 'btn ghost', style: 'text-align:center;text-decoration:none', href: 'https://wa.me/?text=' + encodeURIComponent('احجز موعدك عندنا: ' + url), target: '_blank', rel: 'noopener', text: 'مشاركة عبر واتساب' }),
+        done, fb,
+        el('p', { class: 'soft', text: 'حطه على إنستغرام وواتساب. الزبون بيحجز من المتصفح بدون ما يحمّل تطبيق.' })
+      ]),
+      el('button', { class: 'btn ghost', type: 'button', text: 'تسجيل الخروج', onclick: signOut })
+    );
+  }
+
+  /* ---------- Subscription ---------- */
+  async function subCard() {
+    await refreshShop();
+    var cl = await sb.from('payment_claims').select('id').eq('shop_id', S.shop.id).eq('status', 'pending').limit(1);
+    var pending = !!(cl.data && cl.data.length), left = daysLeft(), on = left > 0;
+    var ref = el('input', { id: 'ref', placeholder: 'رقم العملية', dir: 'ltr', autocapitalize: 'none' });
+    var msg = el('p', { class: 'msg' });
+    var pay = [
+      el('h2', { text: 'تجديد الاشتراك: ' + money(S.shop.plan_price) + ' / شهر' }),
+      el('p', { class: 'soft', text: 'حوّل المبلغ على Whish للرقم:' }),
+      el('b', { class: 'ltr', style: 'font-size:1.15rem', text: MAWEDI.WHISH_NUMBER })
+    ];
+    if (pending) pay.push(el('p', { class: 'soft', text: 'وصلنا إشعار دفعك. بنفعّل الاشتراك أول ما نتأكد من التحويل.' }));
+    else pay.push(el('p', { class: 'soft', text: 'بعد التحويل اكتب رقم العملية:' }), ref, msg, el('button', {
+      class: 'btn', type: 'button', text: 'أرسلت الدفعة', onclick: async function () {
+        if (ref.value.trim().length < 4) { msg.textContent = 'اكتب رقم العملية من Whish.'; return; }
+        var x = await sb.from('payment_claims').insert({ shop_id: S.shop.id, reference: ref.value.trim() });
+        if (x.error) { msg.textContent = 'ما انرسلت. جرّب مرة تانية.'; return; }
+        render();
+      }
+    }));
+    return [
+      el('div', { class: 'card' }, [
+        el('h2', { text: 'حالة الاشتراك' }),
+        el('p', { class: on ? 'soft' : 'msg', text: on ? 'فعّال. بيتوقف بعد ' + left + ' يوم إذا ما تجدد.' : 'غير فعّال. التطبيق وصفحة الحجز متوقفين لحين الدفع.' }),
+        el('button', { class: 'btn ghost', type: 'button', text: 'تحديث الحالة', onclick: async function () { await refreshShop(); render(); } })
+      ]),
+      el('div', { class: 'card' }, pay)
+    ];
+  }
+  async function tabSub(c) {
+    var kids = await subCard();
+    kids.push(el('button', { class: 'btn ghost', type: 'button', text: 'تسجيل الخروج', onclick: signOut }));
+    c.replaceChildren.apply(c, kids);
+  }
+  function viewLocked() {
+    var box = el('div', { style: 'display:grid;gap:12px' });
+    subCard().then(function (kids) {
+      kids.push(el('button', { class: 'btn ghost', type: 'button', text: 'تسجيل الخروج', onclick: signOut }));
+      box.replaceChildren.apply(box, kids);
+      if (active()) render();
+    });
+    return wrap([el('h1', { text: S.shop.name }), el('p', { class: 'msg', text: 'التطبيق متوقف لحين دفع الاشتراك.' }), box]);
+  }
+
+  /* ---------- Shell ---------- */
+  async function refreshShop() {
+    var r = await sb.from('shops').select('*').eq('id', S.shop.id).single();
+    if (r.data) S.shop = r.data;
+  }
+  function render() { show(active() ? viewMain() : viewLocked()); }
+  async function signOut() { await sb.auth.signOut(); S.shop = null; route(); }
+  async function route() {
+    var s = (await sb.auth.getSession()).data.session;
+    if (!s) { show(viewAuth()); return; }
+    S.user = s.user;
+    var r = await sb.from('shops').select('*').eq('owner_id', s.user.id).maybeSingle();
+    S.shop = r.data;
+    if (!S.shop) { show(viewCreate()); return; }
+    render();
+  }
+  document.addEventListener('visibilitychange', async function () {
+    if (document.visibilityState === 'visible' && S.shop) { await refreshShop(); render(); }
+  });
+  route();
+})();
+</script>
+</body>
+</html>
