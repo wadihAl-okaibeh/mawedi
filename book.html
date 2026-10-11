@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>حجز موعد</title>
+<style>
+  :root { --bg:#EEF3F1; --card:#fff; --ink:#0F2A2E; --soft:#4A6166; --line:#CBD8D4; --accent:#0B8F7A; --accent-ink:#fff; --soft-bg:#D3EFE9; --bad:#B3402F; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0C1819; --card:#132426; --ink:#E6F1EE; --soft:#9DB5B0; --line:#28423F; --accent:#3CC7AE; --accent-ink:#072320; --soft-bg:#14403A; --bad:#F08A78; color-scheme: dark; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.6 system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif; padding:20px 16px 48px; }
+  main { max-width:520px; margin:0 auto; display:grid; gap:16px; }
+  h1 { margin:0; font-size:1.5rem; } h2 { margin:0; font-size:1rem; color:var(--soft); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; display:grid; gap:12px; }
+  button { font:inherit; color:inherit; cursor:pointer; }
+  .opt { display:flex; justify-content:space-between; gap:12px; width:100%; text-align:start; padding:12px 14px; border-radius:11px; border:1.5px solid var(--line); background:var(--card); }
+  .opt[aria-pressed="true"] { border-color:var(--accent); background:var(--soft-bg); }
+  .days { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
+  .day { flex:none; min-width:64px; padding:8px; border-radius:11px; border:1.5px solid var(--line); background:var(--card); text-align:center; }
+  .day[aria-pressed="true"] { background:var(--ink); color:var(--bg); border-color:var(--ink); }
+  .slots { display:grid; grid-template-columns:repeat(auto-fill, minmax(76px, 1fr)); gap:8px; }
+  .slot { padding:9px 4px; border-radius:10px; border:1.5px solid var(--line); background:var(--card); font-variant-numeric:tabular-nums; }
+  .slot[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600; }
+  input { font:inherit; color:inherit; width:100%; padding:11px 12px; border-radius:10px; border:1.5px solid var(--line); background:var(--card); }
+  .go { border:0; background:var(--accent); color:var(--accent-ink); font-weight:600; padding:13px; border-radius:11px; width:100%; }
+  .go:disabled { opacity:.45; cursor:not-allowed; }
+  .msg { min-height:1.4em; color:var(--bad); font-size:.9rem; }
+  .ok { background:var(--soft-bg); border-radius:12px; padding:16px; display:grid; gap:4px; }
+  .muted { color:var(--soft); }
+  :focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+</style>
+</head>
+<body>
+<main id="app"><p class="muted">جاري التحميل...</p></main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script>
+(function () {
+  var sb = supabase.createClient(MAWEDI.SUPABASE_URL, MAWEDI.SUPABASE_ANON_KEY);
+  var slug = new URLSearchParams(location.search).get('s');
+  var app = document.getElementById('app');
+  var shop = null, busy = [];
+  var S = { svc: null, day: null, min: null };
+  var ERR = {
+    slot_taken: 'هاد الوقت انحجز قبل لحظات. اختر وقت تاني.',
+    shop_inactive: 'الحجز متوقف مؤقتاً عند هالمحل. تواصل معهم مباشرة.',
+    bad_input: 'تأكد من الاسم ورقم الهاتف.',
+    outside_hours: 'هاد الوقت خارج ساعات العمل.',
+    in_the_past: 'هاد الوقت مرّ. اختر وقت تاني.',
+    service_not_found: 'هالخدمة ما عادت متوفرة. حدّث الصفحة.'
+  };
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function t(m) { return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
+  function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  var dayFmt = new Intl.DateTimeFormat('ar-u-nu-latn', { weekday: 'short' });
+  var longFmt = new Intl.DateTimeFormat('ar-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'long' });
+  var days = [];
+  for (var i = 0; i < 7; i++) { var d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + i); days.push(d); }
+
+  function fail(msg) { app.replaceChildren(el('p', 'muted', msg)); }
+
+  async function loadBusy() {
+    var r = await sb.rpc('public_busy', { p_slug: slug, p_day: ymd(days[S.day]) });
+    busy = r.data || [];
+  }
+  function nowMin() { var n = new Date(); return n.getHours() * 60 + n.getMinutes(); }
+  function isFree(m, minutes) {
+    if (m + minutes > shop.close_min) return false;
+    if (S.day === 0 && m <= nowMin()) return false;
+    return !busy.some(function (b) { return m < b.end_min && m + minutes > b.start_min; });
+  }
+
+  function render() {
+    var svc = shop.services[S.svc];
+    var box = el('div');
+    box.style.display = 'grid'; box.style.gap = '16px';
+
+    var head = el('div'); head.appendChild(el('h1', '', shop.name)); head.appendChild(el('p', 'muted', 'احجز موعدك بدقيقة'));
+    box.appendChild(head);
+
+    var c1 = el('section', 'card');
+    c1.appendChild(el('h2', '', '1. الخدمة'));
+    shop.services.forEach(function (s, i) {
+      var b = el('button', 'opt'); b.type = 'button';
+      b.setAttribute('aria-pressed', String(i === S.svc));
+      b.appendChild(el('span', '', s.name + ' · ' + s.minutes + ' دقيقة'));
+      b.appendChild(el('b', '', '$' + Number(s.price)));
+      b.onclick = function () { S.svc = i; S.min = null; render(); };
+      c1.appendChild(b);
+    });
+    c1.appendChild(el('h2', '', '2. اليوم'));
+    var dr = el('div', 'days');
+    days.forEach(function (d, i) {
+      var b = el('button', 'day'); b.type = 'button';
+      b.setAttribute('aria-pressed', String(i === S.day));
+      b.appendChild(el('div', 'muted', i === 0 ? 'اليوم' : dayFmt.format(d)));
+      b.appendChild(el('b', '', String(d.getDate())));
+      b.onclick = async function () { S.day = i; S.min = null; await loadBusy(); render(); };
+      dr.appendChild(b);
+    });
+    c1.appendChild(dr);
+    c1.appendChild(el('h2', '', '3. الوقت'));
+    var sl = el('div', 'slots'), any = false;
+    for (var m = shop.open_min; m < shop.close_min; m += 30) {
+      if (!isFree(m, svc.minutes)) continue;
+      any = true;
+      var b = el('button', 'slot', t(m)); b.type = 'button';
+      b.setAttribute('aria-pressed', String(S.min === m));
+      (function (mm) { b.onclick = function () { S.min = mm; render(); }; })(m);
+      sl.appendChild(b);
+    }
+    c1.appendChild(any ? sl : el('p', 'muted', 'ما في أوقات فاضية بهاد اليوم. جرّب يوم تاني.'));
+    box.appendChild(c1);
+
+    var c2 = el('section', 'card');
+    c2.appendChild(el('h2', '', '4. بياناتك'));
+    var name = el('input'); name.id = 'name'; name.placeholder = 'الاسم'; name.autocomplete = 'name';
+    var phone = el('input'); phone.id = 'phone'; phone.placeholder = 'رقم الهاتف'; phone.type = 'tel'; phone.dir = 'ltr'; phone.autocomplete = 'tel';
+    var msg = el('div', 'msg');
+    var go = el('button', 'go', S.min === null ? 'اختر وقتاً أولاً' : 'تأكيد الحجز: ' + t(S.min));
+    go.type = 'button'; go.disabled = S.min === null;
+    go.onclick = async function () {
+      go.disabled = true; msg.textContent = '';
+      var r = await sb.rpc('public_book', { p_slug: slug, p_service: svc.id, p_day: ymd(days[S.day]), p_minute: S.min, p_name: name.value, p_phone: phone.value });
+      if (r.error) {
+        var key = Object.keys(ERR).find(function (k) { return (r.error.message || '').indexOf(k) !== -1; });
+        msg.textContent = ERR[key] || 'صار خطأ. جرّب مرة تانية.';
+        await loadBusy(); if (key === 'slot_taken') { S.min = null; render(); } else { go.disabled = false; }
+        return;
+      }
+      var done = el('div', 'ok');
+      done.appendChild(el('b', '', 'تم الحجز'));
+      done.appendChild(el('span', '', svc.name + ' · ' + longFmt.format(days[S.day]) + ' · ' + t(S.min)));
+      done.appendChild(el('span', 'muted', shop.name));
+      app.replaceChildren(done);
+    };
+    [name, phone, msg, go].forEach(function (n) { c2.appendChild(n); });
+    box.appendChild(c2);
+    app.replaceChildren(box);
+  }
+
+  (async function init() {
+    if (!slug) return fail('الرابط ناقص. اطلب رابط الحجز من المحل.');
+    var r = await sb.rpc('public_shop', { p_slug: slug });
+    shop = r.data;
+    if (r.error || !shop) return fail('ما لقينا هالمحل. تأكد من الرابط.');
+    if (!shop.active) return fail('الحجز متوقف مؤقتاً عند ' + shop.name + '. تواصل معهم مباشرة.');
+    if (!shop.services.length) return fail('هالمحل لسا ما أضاف خدمات.');
+    S.svc = 0; S.day = 0;
+    await loadBusy();
+    render();
+  })();
+})();
+</script>
+</body>
+</html>
